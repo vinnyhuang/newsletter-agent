@@ -16,18 +16,15 @@ call mid-flight and re-running skips it via `withStep` rather than re-executing.
     live in version control, not `.env`, so a change to them is reviewable.
     Ad-hoc overrides come from CLI flags, wired up in P0-6/P0-7.
 
-- [ ] **P0-2 — Verify Claude Agent SDK option surface**
-  - De-risk before `runAgent.ts` depends on it. Confirm in the installed
-    `@anthropic-ai/claude-agent-sdk`: structured output via JSON schema,
-    `settingSources: []`, a per-call budget guard, and what usage/cost fields
-    come back under subscription auth.
-  - Findings so far: `outputFormat?: OutputFormat` where
-    `OutputFormat = JsonSchemaOutputFormat`; `settingSources?: SettingSource[]`
-    with `SettingSource = 'user' | 'project' | 'local'`; `maxBudgetUsd?: number`
-    with an `error_max_budget_usd` result subtype. Also an
-    `error_max_structured_output_retries` subtype — the SDK retries schema
-    violations internally, which affects what P0-7 should duplicate.
-  - Remaining: exact type shapes, usage/cost fields on the result message.
+- [x] **P0-2 — Verify Claude Agent SDK option surface**
+  - De-risk before `runAgent.ts` is written against assumptions. Confirm in the
+    installed `@anthropic-ai/claude-agent-sdk` that structured output via JSON
+    schema, `settingSources: []`, and a per-call budget guard exist and behave
+    as the plan assumes. All three do.
+  - Confirm which usage and cost fields the result message carries under
+    subscription auth, and how errors surface.
+  - Write a probe making real `query()` calls, exercising each option
+    independently so a later SDK upgrade can be re-checked the same way.
 
 - [ ] **P0-3 — Wire Drizzle ORM and Postgres client** *(blocks P0-4)*
   - `src/db/client.ts` with a pool sized above `AGENT_CONCURRENCY`
@@ -39,7 +36,11 @@ call mid-flight and re-running skips it via `withStep` rather than re-executing.
   - `run_steps` — `UNIQUE (run_id, step_name, unit_key)`, status
     `pending|running|done|failed`, `result` jsonb, `error`, `attempt`,
     `started_at`, `finished_at`, plus `queue_wait_ms` for Phase 7 tuning data
-  - `agent_calls` — token counts primary, reported cost derived, Langfuse trace id
+  - `agent_calls` — token counts primary, reported cost derived, Langfuse trace
+    id. **Store the result's `modelUsage` as jsonb**, not flat token columns:
+    the SDK documents `modelUsage` (keyed by model id) as the correct field for
+    token accounting, and `usage` as main-agent-loop-only. A single call can
+    therefore span several models, which flat columns would silently drop.
 
 - [ ] **P0-5 — Implement `withStep` memoization helper with tests** *(blocked by P0-4; blocks P0-6)*
   - `src/db/steps.ts`: returns the stored result if a `done` row exists,
@@ -51,6 +52,12 @@ call mid-flight and re-running skips it via `withStep` rather than re-executing.
 - [ ] **P0-6 — Implement `runAgent.ts` wrapper** *(blocked by P0-2, P0-5)*
   - Wraps `query()`. Takes `{ name, systemPrompt, prompt, schema, model,
     budget, mcpServers?, allowedTools? }`
+  - Always pass `settingSources: []` (SDK isolation mode — also keeps
+    `CLAUDE.md` out of the agent's context) and a `systemPrompt` string, which
+    replaces the Claude Code preset rather than appending to it
+  - **Handle failure both ways**: wrap the message loop in try/catch *and*
+    check the result message's subtype. Two lines, and it does not depend on
+    assumptions about which errors throw versus which are yielded.
   - Acquires the global p-limit semaphore (`AGENT_CONCURRENCY`, default 4),
     validates with zod, writes an `agent_calls` row, returns typed output
   - Expose a `--concurrency` CLI flag overriding the `agents.ts` default for a
@@ -60,9 +67,11 @@ call mid-flight and re-running skips it via `withStep` rather than re-executing.
 
 - [ ] **P0-7 — Add backoff, retry, and runaway guard to `runAgent`**
   - Adaptive backoff: a rate-limit response drops effective concurrency to 1
-    globally, honors the retry delay, ramps back over subsequent successes
+    globally, honors the retry delay, then ramps back over subsequent successes
   - Retry with exponential backoff and jitter, capped attempts; on exhaustion
     mark the `run_steps` row failed and let the graph continue
+  - Before adding a retry layer, check what the SDK already retries internally
+    so we do not stack one on top of another
   - Hard ceiling on total agent calls per run (`MAX_AGENT_CALLS_PER_RUN`),
     with a `--max-calls` CLI flag to override it for a single invocation
 
