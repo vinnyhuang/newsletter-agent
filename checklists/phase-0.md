@@ -26,10 +26,14 @@ call mid-flight and re-running skips it via `withStep` rather than re-executing.
   - Write a probe making real `query()` calls, exercising each option
     independently so a later SDK upgrade can be re-checked the same way.
 
-- [ ] **P0-3 — Wire Drizzle ORM and Postgres client** *(blocks P0-4)*
-  - `src/db/client.ts` with a pool sized above `AGENT_CONCURRENCY`
-  - `schema.ts` entry point, `db:generate` / `db:migrate` scripts
-  - Create the local database
+- [x] **P0-3 — Wire Drizzle ORM and Postgres client** *(blocks P0-4)*
+  - `docker-compose.yml` — dedicated Postgres container, isolated from any
+    Postgres already running on the host. `pnpm db:up` / `db:down`.
+  - `.env` supplies the database parts to both `src/config/env.ts` and Compose;
+    `env.ts` assembles the connection URL from them
+  - `src/db/client.ts` — pool sized above `AGENT_CONCURRENCY`, exports `closeDb()`
+  - `src/db/schema.ts` entry point and `drizzle.config.ts`
+  - `db:generate` / `db:migrate` scripts via drizzle-kit
 
 - [ ] **P0-4 — Write Phase 0 migration** *(blocked by P0-3; blocks P0-5)*
   - `runs`
