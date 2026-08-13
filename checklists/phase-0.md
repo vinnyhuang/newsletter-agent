@@ -35,7 +35,7 @@ call mid-flight and re-running skips it via `withStep` rather than re-executing.
   - `src/db/schema.ts` entry point and `drizzle.config.ts`
   - `db:generate` / `db:migrate` scripts via drizzle-kit
 
-- [ ] **P0-4 — Write Phase 0 migration** *(blocked by P0-3; blocks P0-5)*
+- [x] **P0-4 — Write Phase 0 migration** *(blocked by P0-3; blocks P0-5)*
   - `runs`
   - `run_steps` — `UNIQUE (run_id, step_name, unit_key)`, status
     `pending|running|done|failed`, `result` jsonb, `error`, `attempt`,
@@ -52,6 +52,8 @@ call mid-flight and re-running skips it via `withStep` rather than re-executing.
   - This is the entire resume mechanism, so it gets tests first: second call
     with the same key does not invoke `fn`; a failed step retries on the next
     call; concurrent calls on the same key do not double-execute
+  - Unwrap `DrizzleQueryError` when detecting a unique violation — the SQLSTATE
+    is on `err.cause.code`, not on the top-level error
 
 - [ ] **P0-6 — Implement `runAgent.ts` wrapper** *(blocked by P0-2, P0-5)*
   - Wraps `query()`. Takes `{ name, systemPrompt, prompt, schema, model,

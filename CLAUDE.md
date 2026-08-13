@@ -10,6 +10,10 @@ This is a project where I'm trying to learn more about agent development (includ
 
 Check items off as they complete. Only rewrite an entry afterwards if the work turned out significantly different from what was scoped — and then re-scope it in that same voice, rather than appending what happened. Findings, measurements, verification results, and the reasoning behind decisions do not go here. They belong in the walkthrough you write after each task, and in the plan document only when they change the architecture.
 
+## Migrations
+
+Always generate with an explicit name — `pnpm db:generate --name <name>` — or drizzle-kit invents a random one. Name it verb-first after what the migration does, not the phase it belongs to: `create_runs_run_steps_agent_calls`, `add_story_units_dedupe_key_index`.
+
 ## Comments
 
 Write comments for someone reading the file cold, who has never seen our conversation.
