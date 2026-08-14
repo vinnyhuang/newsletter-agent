@@ -71,15 +71,21 @@ call mid-flight and re-running skips it via `withStep` rather than re-executing.
     concurrency is mutable, exposed via `setAgentConcurrency()`. The flag itself
     is wired when the CLI exists in P1; P0-7's backoff uses the same setter.
 
-- [ ] **P0-7 — Add backoff, retry, and runaway guard to `runAgent`**
-  - Adaptive backoff: a rate-limit response drops effective concurrency to 1
-    globally, honors the retry delay, then ramps back over subsequent successes
-  - Retry with exponential backoff and jitter, capped attempts; on exhaustion
-    mark the `run_steps` row failed and let the graph continue
-  - Before adding a retry layer, check what the SDK already retries internally
-    so we do not stack one on top of another
-  - Hard ceiling on total agent calls per run (`MAX_AGENT_CALLS_PER_RUN`),
-    with a `--max-calls` CLI flag to override it for a single invocation
+- [x] **P0-7 — Add a circuit breaker and runaway guard to `runAgent`**
+  - Trip a circuit breaker on the first `api_retry` carrying
+    `error: 'rate_limit'`, or on a `rate_limit_event` with `status: 'rejected'`,
+    capturing `resetsAt` when present
+  - Once tripped, throw `RateLimitExhaustedError` without reaching the SDK, so
+    the run ends quickly and resumes cheaply after the window resets
+  - Check the breaker inside the semaphore rather than on entry — a fan-out
+    calls `runAgent` for every unit before any completes, so it is the queued
+    calls that need stopping
+  - Count `api_retry` messages and report the count in the error of a call that
+    fails after retries
+  - Enforce a per-run ceiling on agent calls (`MAX_AGENT_CALLS_PER_RUN`) before
+    queueing, with `setMaxAgentCallsPerRun()` as the seam for `--max-calls` in P1
+  - No retry layer and no adaptive concurrency: the SDK owns retries, and these
+    rate limits are long-window quotas rather than rates
 
 - [ ] **P0-8 — Set up Langfuse and OTel instrumentation**
   - Clone and run `langfuse/langfuse` separately via its own docker compose
