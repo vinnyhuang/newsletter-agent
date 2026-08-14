@@ -56,7 +56,7 @@ call mid-flight and re-running skips it via `withStep` rather than re-executing.
     with the same key does not invoke `fn`; a failed step retries on the next
     call; a step left running is taken over
 
-- [ ] **P0-6 — Implement `runAgent.ts` wrapper** *(blocked by P0-2, P0-5)*
+- [x] **P0-6 — Implement `runAgent.ts` wrapper** *(blocked by P0-2, P0-5)*
   - Wraps `query()`. Takes `{ name, systemPrompt, prompt, schema, model,
     budget, mcpServers?, allowedTools? }`
   - Always pass `settingSources: []` (SDK isolation mode — also keeps
@@ -67,10 +67,9 @@ call mid-flight and re-running skips it via `withStep` rather than re-executing.
     assumptions about which errors throw versus which are yielded.
   - Acquires the global p-limit semaphore (`AGENT_CONCURRENCY`, default 4),
     validates with zod, writes an `agent_calls` row, returns typed output
-  - Expose a `--concurrency` CLI flag overriding the `agents.ts` default for a
-    single invocation. Needs a seam: the semaphore is constructed once, so
-    resolve the value at startup rather than importing the constant directly at
-    every call site.
+  - Build the seam for a `--concurrency` override: a module-level limiter whose
+    concurrency is mutable, exposed via `setAgentConcurrency()`. The flag itself
+    is wired when the CLI exists in P1; P0-7's backoff uses the same setter.
 
 - [ ] **P0-7 — Add backoff, retry, and runaway guard to `runAgent`**
   - Adaptive backoff: a rate-limit response drops effective concurrency to 1

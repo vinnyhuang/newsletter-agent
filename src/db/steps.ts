@@ -18,6 +18,7 @@ import { runSteps } from './schema.ts';
 
 /** Passed to the work function so it can attach records to its own step row. */
 export type StepContext = {
+  runId: string;
   runStepId: string;
   attempt: number;
 };
@@ -54,7 +55,7 @@ export async function withStep<T>(
   const claimed = await claim(runId, stepName, unitKey, existing);
 
   try {
-    const produced = await fn({ runStepId: claimed.id, attempt: claimed.attempt });
+    const produced = await fn({ runId, runStepId: claimed.id, attempt: claimed.attempt });
     await db
       .update(runSteps)
       .set({ status: 'done', result: produced ?? null, error: null, finishedAt: new Date() })

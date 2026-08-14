@@ -32,3 +32,14 @@ export const AGENT_CONCURRENCY = 4;
  * the ceiling.
  */
 export const MAX_AGENT_CALLS_PER_RUN = 500;
+
+/**
+ * Ceiling on a single agent call's reported cost, before it is aborted.
+ *
+ * Bounds one runaway call — a loop that keeps calling tools, or a prompt that
+ * elicits an enormous response. Under subscription auth the figure the SDK
+ * reports is a notional API price rather than billed spend, but it tracks token
+ * volume closely enough to serve as a guard. Set well above a normal call so it
+ * only fires on genuinely anomalous ones.
+ */
+export const DEFAULT_AGENT_BUDGET_USD = 2;

@@ -1,22 +1,27 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { afterAll, expect, test } from 'vitest';
 import { closeDb, db } from './client.ts';
 import { runSteps, runs } from './schema.ts';
 import { withStep } from './steps.ts';
 
-/** Marks rows as test fixtures so they can be cleared without touching real runs. */
-const TEST_WEEK = 'test-week';
+/**
+ * Cleanup is by the ids this file created, not by a shared marker. Vitest runs
+ * test files in parallel, so deleting on a marker any other file also uses
+ * would cascade away that file's fixtures mid-run.
+ */
+const createdRuns: string[] = [];
 
 afterAll(async () => {
   // Cascades to run_steps and agent_calls.
-  await db.delete(runs).where(eq(runs.weekId, TEST_WEEK));
+  if (createdRuns.length) await db.delete(runs).where(inArray(runs.id, createdRuns));
   await closeDb();
 });
 
 /** Each test gets its own run, so they can run in any order or in parallel. */
 async function newRun(): Promise<string> {
-  const [run] = await db.insert(runs).values({ weekId: TEST_WEEK }).returning();
+  const [run] = await db.insert(runs).values({ weekId: 'test-steps' }).returning();
   if (!run) throw new Error('failed to create run');
+  createdRuns.push(run.id);
   return run.id;
 }
 
