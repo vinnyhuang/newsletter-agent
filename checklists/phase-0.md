@@ -46,14 +46,15 @@ call mid-flight and re-running skips it via `withStep` rather than re-executing.
     token accounting, and `usage` as main-agent-loop-only. A single call can
     therefore span several models, which flat columns would silently drop.
 
-- [ ] **P0-5 — Implement `withStep` memoization helper with tests** *(blocked by P0-4; blocks P0-6)*
+- [x] **P0-5 — Implement `withStep` memoization helper with tests** *(blocked by P0-4; blocks P0-6)*
   - `src/db/steps.ts`: returns the stored result if a `done` row exists,
-    otherwise marks running, executes, validates, records `done` or `failed`
+    otherwise marks running, executes, records `done` or `failed`. Memoization
+    only — validating results is the caller's job.
+  - Treat `running` exactly like `failed` — each step has one caller, so a row
+    still marked running was abandoned by a process that died mid-step
   - This is the entire resume mechanism, so it gets tests first: second call
     with the same key does not invoke `fn`; a failed step retries on the next
-    call; concurrent calls on the same key do not double-execute
-  - Unwrap `DrizzleQueryError` when detecting a unique violation — the SQLSTATE
-    is on `err.cause.code`, not on the top-level error
+    call; a step left running is taken over
 
 - [ ] **P0-6 — Implement `runAgent.ts` wrapper** *(blocked by P0-2, P0-5)*
   - Wraps `query()`. Takes `{ name, systemPrompt, prompt, schema, model,
