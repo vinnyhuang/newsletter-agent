@@ -30,7 +30,7 @@ const EnvSchema = z.object({
 
   LANGFUSE_PUBLIC_KEY: z.string().optional(),
   LANGFUSE_SECRET_KEY: z.string().optional(),
-  LANGFUSE_BASEURL: z.url().optional(),
+  LANGFUSE_BASE_URL: z.url().optional(),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
@@ -70,4 +70,4 @@ export const databaseUrl = `postgres://${encodeURIComponent(env.POSTGRES_USER)}:
 export const langfuseEnabled =
   Boolean(env.LANGFUSE_PUBLIC_KEY) &&
   Boolean(env.LANGFUSE_SECRET_KEY) &&
-  Boolean(env.LANGFUSE_BASEURL);
+  Boolean(env.LANGFUSE_BASE_URL);

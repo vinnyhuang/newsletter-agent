@@ -87,12 +87,20 @@ call mid-flight and re-running skips it via `withStep` rather than re-executing.
   - No retry layer and no adaptive concurrency: the SDK owns retries, and these
     rate limits are long-window quotas rather than rates
 
-- [ ] **P0-8 — Set up Langfuse and OTel instrumentation**
+- [x] **P0-8 — Set up Langfuse and OTel instrumentation**
   - Clone and run `langfuse/langfuse` separately via its own docker compose
-    (its own Postgres/Clickhouse/Redis/MinIO — not entangled with this project)
+    (its own Postgres/Clickhouse/Redis/MinIO — not entangled with this project),
+    overriding the ports it publishes to avoid local collisions
   - Record steps in `docs/langfuse-setup.md`
   - `src/observability/instrumentation.ts`: OTel `NodeSDK` with
-    `LangfuseSpanProcessor` plus `ClaudeAgentSDKInstrumentation`, with a
-    `shouldExportSpan` filter admitting that scope. Imported first.
+    `LangfuseSpanProcessor` plus `ClaudeAgentSDKInstrumentation`, started
+    explicitly by CLI entry points so importing it in a test opens no exporter
+  - `src/observability/agentSdk.ts`: route `query` through a swappable handle —
+    under ESM the instrumentation returns a new module object rather than
+    patching exports in place, so a direct import would emit no spans
+  - Open a span per call in `runAgent` to parent the SDK's spans and supply
+    `agent_calls.langfuse_trace_id`
+  - Strip zod's `$schema` key before passing the JSON Schema to the SDK; the
+    CLI rejects it
 
 - [ ] **P0-9 — Run Phase 0 exit check** *(blocked by P0-6, P0-7, P0-8)*

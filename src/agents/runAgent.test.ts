@@ -151,13 +151,15 @@ test('passes isolation options and a JSON Schema derived from the zod schema', a
   expect(options?.systemPrompt).toBe('Answer tersely.');
   expect(options?.outputFormat).toEqual({
     type: 'json_schema',
-    schema: expect.objectContaining({
+    schema: {
       type: 'object',
       properties: { capital: { type: 'string' } },
       required: ['capital'],
       additionalProperties: false,
-    }),
+    },
   });
+  // zod emits a `$schema` dialect URL that the CLI rejects outright.
+  expect(options?.outputFormat).not.toHaveProperty('schema.$schema');
 });
 
 test('records an agent_calls row linked to the step, with usage rolled up', async () => {

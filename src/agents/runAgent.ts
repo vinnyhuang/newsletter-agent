@@ -1,4 +1,5 @@
-import { query, type Options, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { Options, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import { trace } from '@opentelemetry/api';
 import { eq } from 'drizzle-orm';
 import pLimit from 'p-limit';
 import { z } from 'zod';
@@ -11,6 +12,7 @@ import type { ModelId } from '../config/models.ts';
 import { db } from '../db/client.ts';
 import { agentCalls, runSteps, type ModelUsageEntry } from '../db/schema.ts';
 import type { StepContext } from '../db/steps.ts';
+import { agentQuery } from '../observability/agentSdk.ts';
 
 /**
  * The single entry point for calling a model.
@@ -25,6 +27,13 @@ export type AgentSpec<T> = {
   /** The agent task, recorded as `agent_calls.agent_name`, e.g. `triage`. */
   name: string;
   model: ModelId;
+  /**
+   * Must be byte-stable across calls for a given agent. It sits inside the
+   * cached prompt prefix, so interpolating anything per-call — a date, a story
+   * title — makes every call a cache miss and roughly quadruples its token cost,
+   * with no error to notice. Per-call content belongs in `prompt`, which sits
+   * after the cached portion.
+   */
   systemPrompt: string;
   prompt: string;
   /**
@@ -125,65 +134,85 @@ export async function runAgent<T>(ctx: StepContext, spec: AgentSpec<T>): Promise
 
   const queuedAt = Date.now();
 
-  return limit(async () => {
-    // Checked here rather than on entry, because a fan-out calls runAgent for
-    // every unit before any of them completes — so nearly all of them pass an
-    // entry check, and it is the ones already waiting that must not proceed.
-    if (breaker.tripped) throw new RateLimitExhaustedError(breaker);
+  return limit(() =>
+    // Our own span parents the ones the SDK instrumentation emits, and is what
+    // gives us a trace id to store alongside the call.
+    tracer.startActiveSpan(`agent.${spec.name}`, async (span) => {
+      const langfuseTraceId = exportedTraceId(span.spanContext().traceId);
+      try {
+        // Checked here rather than on entry, because a fan-out calls runAgent for
+        // every unit before any of them completes — so nearly all of them pass an
+        // entry check, and it is the ones already waiting that must not proceed.
+        if (breaker.tripped) throw new RateLimitExhaustedError(breaker);
 
-    await recordQueueWait(ctx.runStepId, Date.now() - queuedAt);
+        await recordQueueWait(ctx.runStepId, Date.now() - queuedAt);
 
-    const startedAt = Date.now();
-    let trace: CallTrace = { retries: 0 };
-    let thrown: unknown;
+        const startedAt = Date.now();
+        let callTrace: CallTrace = { retries: 0 };
+        let thrown: unknown;
 
-    // Failures arrive two ways — as a raised error, or as a result message with
-    // an error subtype. Handling both costs a branch and avoids depending on
-    // which one a given SDK version uses.
-    try {
-      trace = await collectResult(spec);
-    } catch (err) {
-      thrown = err;
-    }
+        // Failures arrive two ways — as a raised error, or as a result message
+        // with an error subtype. Handling both costs a branch and avoids
+        // depending on which one a given SDK version uses.
+        try {
+          callTrace = await collectResult(spec);
+        } catch (err) {
+          thrown = err;
+        }
 
-    const { result, retries } = trace;
-    const durationMs = Date.now() - startedAt;
+        const { result, retries } = callTrace;
+        const durationMs = Date.now() - startedAt;
 
-    if (!result || result.subtype !== 'success') {
-      await writeAgentCall(ctx, spec, {
-        isError: true,
-        resultSubtype: result?.subtype ?? null,
-        durationMs,
-        numTurns: result?.num_turns ?? null,
-        modelUsage: result?.modelUsage ?? {},
-        totalCostUsd: result?.total_cost_usd ?? null,
-      });
-      const retried = retries > 0 ? ` after ${retries} SDK retries` : '';
-      throw (
-        thrown ??
-        new Error(
-          `agent ${spec.name} produced ${result ? `a ${result.subtype} result` : 'no result message'}${retried}`,
-        )
-      );
-    }
+        if (!result || result.subtype !== 'success') {
+          await writeAgentCall(ctx, spec, {
+            isError: true,
+            resultSubtype: result?.subtype ?? null,
+            durationMs,
+            numTurns: result?.num_turns ?? null,
+            modelUsage: result?.modelUsage ?? {},
+            totalCostUsd: result?.total_cost_usd ?? null,
+            langfuseTraceId,
+          });
+          const retried = retries > 0 ? ` after ${retries} SDK retries` : '';
+          throw (
+            thrown ??
+            new Error(
+              `agent ${spec.name} produced ${result ? `a ${result.subtype} result` : 'no result message'}${retried}`,
+            )
+          );
+        }
 
-    // Recorded before the schema check so a call that ran but returned the wrong
-    // shape still shows its token cost.
-    const parsed = spec.schema.safeParse(result.structured_output);
-    await writeAgentCall(ctx, spec, {
-      isError: !parsed.success,
-      resultSubtype: result.subtype,
-      durationMs,
-      numTurns: result.num_turns,
-      modelUsage: result.modelUsage,
-      totalCostUsd: result.total_cost_usd,
-    });
+        // Recorded before the schema check so a call that ran but returned the
+        // wrong shape still shows its token cost.
+        const parsed = spec.schema.safeParse(result.structured_output);
+        await writeAgentCall(ctx, spec, {
+          isError: !parsed.success,
+          resultSubtype: result.subtype,
+          durationMs,
+          numTurns: result.num_turns,
+          modelUsage: result.modelUsage,
+          totalCostUsd: result.total_cost_usd,
+          langfuseTraceId,
+        });
 
-    if (!parsed.success) {
-      throw new Error(`agent ${spec.name} returned output failing its schema: ${parsed.error.message}`);
-    }
-    return parsed.data;
-  });
+        if (!parsed.success) {
+          throw new Error(
+            `agent ${spec.name} returned output failing its schema: ${parsed.error.message}`,
+          );
+        }
+        return parsed.data;
+      } finally {
+        span.end();
+      }
+    }),
+  );
+}
+
+const tracer = trace.getTracer('newsletter-agent');
+
+/** OTel hands back an all-zero id when no exporter is running. */
+function exportedTraceId(traceId: string): string | null {
+  return /^0+$/.test(traceId) ? null : traceId;
 }
 
 type CallTrace = { result?: ResultMessage; retries: number };
@@ -201,7 +230,7 @@ async function collectResult<T>(spec: AgentSpec<T>): Promise<CallTrace> {
   let result: ResultMessage | undefined;
   let retries = 0;
 
-  for await (const message of query({ prompt: spec.prompt, options: buildOptions(spec) })) {
+  for await (const message of agentQuery({ prompt: spec.prompt, options: buildOptions(spec) })) {
     if (message.type === 'result') {
       result = message;
       continue;
@@ -224,7 +253,8 @@ async function collectResult<T>(spec: AgentSpec<T>): Promise<CallTrace> {
 function buildOptions<T>(spec: AgentSpec<T>): Options {
   return {
     model: spec.model,
-    // A string replaces the Claude Code preset; the object form appends to it.
+    // A string replaces the Claude Code preset. Do not switch to the object
+    // form: the preset carries dynamic sections that shift the cached prefix.
     systemPrompt: spec.systemPrompt,
     // Isolation mode: no user, project, or local settings, and no CLAUDE.md.
     // Every agent task must be reproducible from its own prompt alone.
@@ -232,13 +262,21 @@ function buildOptions<T>(spec: AgentSpec<T>): Options {
     // These agents transform text; none needs a filesystem or a shell.
     allowedTools: spec.allowedTools ?? [],
     title: spec.name,
-    outputFormat: {
-      type: 'json_schema',
-      schema: z.toJSONSchema(spec.schema) as Record<string, unknown>,
-    },
+    outputFormat: { type: 'json_schema', schema: jsonSchemaFor(spec.schema) },
     maxBudgetUsd: spec.maxBudgetUsd ?? DEFAULT_AGENT_BUDGET_USD,
     ...(spec.mcpServers ? { mcpServers: spec.mcpServers } : {}),
   };
+}
+
+/**
+ * zod stamps a `$schema` dialect URL onto its output. The CLI rejects it —
+ * "not a valid JSON Schema: no schema with key or ref ..." — so it has to come
+ * off before the schema is handed over.
+ */
+function jsonSchemaFor(schema: z.ZodType<unknown>): Record<string, unknown> {
+  const generated = z.toJSONSchema(schema) as Record<string, unknown>;
+  delete generated['$schema'];
+  return generated;
 }
 
 export type UsageRollup = {
@@ -278,6 +316,7 @@ type CallOutcome = {
   numTurns: number | null;
   modelUsage: Record<string, ModelUsageEntry>;
   totalCostUsd: number | null;
+  langfuseTraceId: string | null;
 };
 
 async function writeAgentCall<T>(
@@ -297,6 +336,7 @@ async function writeAgentCall<T>(
     modelUsage: outcome.modelUsage,
     ...summarizeUsage(outcome.modelUsage),
     totalCostUsd: outcome.totalCostUsd,
+    langfuseTraceId: outcome.langfuseTraceId,
   });
 }
 
