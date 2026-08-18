@@ -110,6 +110,40 @@ function toDate(epoch: number): Date {
   return new Date(epoch < 1e12 ? epoch * 1000 : epoch);
 }
 
+export type RateLimitInfo = Extract<
+  SDKMessage,
+  { type: 'rate_limit_event' }
+>['rate_limit_info'];
+
+let lastRateLimit: RateLimitInfo | undefined;
+
+/** Most recent quota reading, for a CLI to report at the end of a run. */
+export function lastRateLimitSnapshot(): RateLimitInfo | undefined {
+  return lastRateLimit;
+}
+
+/**
+ * Quota consumption is otherwise invisible until a run fails outright.
+ *
+ * Overage matters more than utilization: with extra usage enabled an exhausted
+ * quota may bill rather than reject, so the breaker never trips and the run
+ * keeps spending. Warn on every call in that state; otherwise stay quiet until
+ * the quota is nearly gone, since a ~200-call run would drown in per-call lines.
+ */
+function noteRateLimit(info: RateLimitInfo): void {
+  lastRateLimit = info;
+  const window = info.rateLimitType ?? 'quota';
+
+  if (info.isUsingOverage) {
+    console.warn(`[rate-limit] using PAID OVERAGE on ${window} — this bills beyond the subscription`);
+    return;
+  }
+  if (info.status === 'allowed_warning' || (info.utilization ?? 0) >= 0.8) {
+    const pct = info.utilization === undefined ? 'unknown' : `${Math.round(info.utilization * 100)}%`;
+    console.warn(`[rate-limit] ${pct} of ${window} consumed`);
+  }
+}
+
 const callsPerRun = new Map<string, number>();
 let maxCallsPerRun = MAX_AGENT_CALLS_PER_RUN;
 
@@ -242,8 +276,11 @@ async function collectResult<T>(spec: AgentSpec<T>): Promise<CallTrace> {
       continue;
     }
 
-    if (message.type === 'rate_limit_event' && message.rate_limit_info.status === 'rejected') {
-      tripBreaker('rate limit rejected', message.rate_limit_info.resetsAt);
+    if (message.type === 'rate_limit_event') {
+      noteRateLimit(message.rate_limit_info);
+      if (message.rate_limit_info.status === 'rejected') {
+        tripBreaker('rate limit rejected', message.rate_limit_info.resetsAt);
+      }
     }
   }
 

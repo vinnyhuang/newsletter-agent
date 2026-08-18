@@ -14,7 +14,8 @@
     "pipeline": "tsx src/cli/run.ts",
     "resume": "tsx src/cli/resume.ts",
     "review": "tsx src/cli/review.ts",
-    "render": "tsx src/cli/render.ts"
+    "render": "tsx src/cli/render.ts",
+    "smoke": "tsx scripts/smoke.ts"
   },
   "keywords": [],
   "author": "",

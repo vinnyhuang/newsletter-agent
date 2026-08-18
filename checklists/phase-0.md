@@ -103,4 +103,10 @@ call mid-flight and re-running skips it via `withStep` rather than re-executing.
   - Strip zod's `$schema` key before passing the JSON Schema to the SDK; the
     CLI rejects it
 
-- [ ] **P0-9 — Run Phase 0 exit check** *(blocked by P0-6, P0-7, P0-8)*
+- [x] **P0-9 — Run Phase 0 exit check** *(blocked by P0-6, P0-7, P0-8)*
+  - Commit the end-to-end check as `scripts/smoke.ts` / `pnpm smoke`, kept out of
+    `pnpm test` so real model calls never run in the fast loop. `--fresh` starts
+    a run; a bare invocation reuses the latest one, which is the resume check.
+  - Record the last `rate_limit_event` and expose it via
+    `lastRateLimitSnapshot()`; warn on paid overage, and on high utilization,
+    rather than logging a line per call
